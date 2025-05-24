@@ -464,18 +464,28 @@ class A2AStarletteRouter:
         the `build()` method.
     """
 
-    def __init__(self, agent_card: AgentCard, http_handler: RequestHandler):
+    def __init__(
+        self,
+        agent_card: AgentCard,
+        http_handler: RequestHandler,
+        agent_card_path: str = '/agent.json',
+        rpc_path: str = '/',
+    ):
         """Initializes the A2AStarletteRouter.
 
         Args:
             agent_card: The AgentCard describing the agent's capabilities.
             http_handler: The handler instance responsible for processing A2A
               requests via http.
+            agent_card_path: The URL path for the agent card endpoint.
+            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
         """
         self.agent_card = agent_card
         self.handler = JSONRPCHandler(
             agent_card=agent_card, request_handler=http_handler
         )
+        self.agent_card_path = agent_card_path
+        self.rpc_path = rpc_path
 
     def _generate_error_response(
         self, request_id: str | int | None, error: JSONRPCError | A2AError
@@ -698,29 +708,21 @@ class A2AStarletteRouter:
             self.agent_card.model_dump(mode='json', exclude_none=True)
         )
 
-    def routes(
-        self,
-        agent_card_path: str = '/agent.json',
-        rpc_path: str = '/',
-    ) -> list[Route]:
+    def routes(self) -> list[Route]:
         """Returns the Starlette Routes for handling A2A requests.
-
-        Args:
-            agent_card_path: The URL path for the agent card endpoint.
-            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
 
         Returns:
             A list of Starlette Route objects.
         """
         return [
             Route(
-                rpc_path,
+                self.rpc_path,
                 self._handle_requests,
                 methods=['POST'],
                 name='a2a_handler',
             ),
             Route(
-                agent_card_path,
+                self.agent_card_path,
                 self._handle_get_agent_card,
                 methods=['GET'],
                 name='agent_card',
