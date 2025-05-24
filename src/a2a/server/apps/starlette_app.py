@@ -714,13 +714,13 @@ class A2AStarletteRouter:
         """
         return [
             Route(
-                rpc_url,
+                rpc_path,
                 self._handle_requests,
                 methods=['POST'],
                 name='a2a_handler',
             ),
             Route(
-                agent_card_url,
+                agent_card_path,
                 self._handle_get_agent_card,
                 methods=['GET'],
                 name='agent_card',
