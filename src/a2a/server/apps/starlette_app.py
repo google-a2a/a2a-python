@@ -468,8 +468,8 @@ class A2AStarletteRouter:
         self,
         agent_card: AgentCard,
         http_handler: RequestHandler,
-        agent_card_path: str = '/agent.json',
-        rpc_path: str = '/',
+        extended_agent_card: AgentCard | None = None,
+        context_builder: CallContextBuilder | None = None,
     ):
         """Initializes the A2AStarletteRouter.
 
@@ -477,15 +477,25 @@ class A2AStarletteRouter:
             agent_card: The AgentCard describing the agent's capabilities.
             http_handler: The handler instance responsible for processing A2A
               requests via http.
-            agent_card_path: The URL path for the agent card endpoint.
-            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
+            extended_agent_card: An optional, distinct AgentCard to be served
+              at the authenticated extended card endpoint.
+            context_builder: The CallContextBuilder used to construct the
+              ServerCallContext passed to the http_handler. If None, no
+              ServerCallContext is passed.
         """
         self.agent_card = agent_card
+        self.extended_agent_card = extended_agent_card
         self.handler = JSONRPCHandler(
             agent_card=agent_card, request_handler=http_handler
         )
-        self.agent_card_path = agent_card_path
-        self.rpc_path = rpc_path
+        if (
+            self.agent_card.supportsAuthenticatedExtendedCard
+            and self.extended_agent_card is None
+        ):
+            logger.error(
+                'AgentCard.supportsAuthenticatedExtendedCard is True, but no extended_agent_card was provided. The /agent/authenticatedExtendedCard endpoint will return 404.'
+            )
+        self._context_builder = context_builder
 
     def _generate_error_response(
         self, request_id: str | int | None, error: JSONRPCError | A2AError
@@ -505,7 +515,6 @@ class A2AStarletteRouter:
             id=request_id,
             error=error if isinstance(error, JSONRPCError) else error.root,
         )
-
         log_level = (
             logging.ERROR
             if not isinstance(error, A2AError)
@@ -543,24 +552,25 @@ class A2AStarletteRouter:
         """
         request_id = None
         body = None
-
         try:
             body = await request.json()
             a2a_request = A2ARequest.model_validate(body)
-
+            call_context = (
+                self._context_builder.build(request)
+                if self._context_builder
+                else None
+            )
             request_id = a2a_request.root.id
             request_obj = a2a_request.root
-
             if isinstance(
                 request_obj,
                 TaskResubscriptionRequest | SendStreamingMessageRequest,
             ):
                 return await self._process_streaming_request(
-                    request_id, a2a_request
+                    request_id, a2a_request, call_context
                 )
-
             return await self._process_non_streaming_request(
-                request_id, a2a_request
+                request_id, a2a_request, call_context
             )
         except MethodNotImplementedError:
             traceback.print_exc()
@@ -586,7 +596,10 @@ class A2AStarletteRouter:
             )
 
     async def _process_streaming_request(
-        self, request_id: str | int | None, a2a_request: A2ARequest
+        self,
+        request_id: str | int | None,
+        a2a_request: A2ARequest,
+        context: ServerCallContext,
     ) -> Response:
         """Processes streaming requests (message/stream or tasks/resubscribe).
 
@@ -603,14 +616,20 @@ class A2AStarletteRouter:
             request_obj,
             SendStreamingMessageRequest,
         ):
-            handler_result = self.handler.on_message_send_stream(request_obj)
+            handler_result = self.handler.on_message_send_stream(
+                request_obj, context
+            )
         elif isinstance(request_obj, TaskResubscriptionRequest):
-            handler_result = self.handler.on_resubscribe_to_task(request_obj)
-
+            handler_result = self.handler.on_resubscribe_to_task(
+                request_obj, context
+            )
         return self._create_response(handler_result)
 
     async def _process_non_streaming_request(
-        self, request_id: str | int | None, a2a_request: A2ARequest
+        self,
+        request_id: str | int | None,
+        a2a_request: A2ARequest,
+        context: ServerCallContext,
     ) -> Response:
         """Processes non-streaming requests (message/send, tasks/get, tasks/cancel, tasks/pushNotificationConfig/*).
 
@@ -625,18 +644,26 @@ class A2AStarletteRouter:
         handler_result: Any = None
         match request_obj:
             case SendMessageRequest():
-                handler_result = await self.handler.on_message_send(request_obj)
+                handler_result = await self.handler.on_message_send(
+                    request_obj, context
+                )
             case CancelTaskRequest():
-                handler_result = await self.handler.on_cancel_task(request_obj)
+                handler_result = await self.handler.on_cancel_task(
+                    request_obj, context
+                )
             case GetTaskRequest():
-                handler_result = await self.handler.on_get_task(request_obj)
+                handler_result = await self.handler.on_get_task(
+                    request_obj, context
+                )
             case SetTaskPushNotificationConfigRequest():
                 handler_result = await self.handler.set_push_notification(
-                    request_obj
+                    request_obj,
+                    context,
                 )
             case GetTaskPushNotificationConfigRequest():
                 handler_result = await self.handler.get_push_notification(
-                    request_obj
+                    request_obj,
+                    context,
                 )
             case _:
                 logger.error(
@@ -648,7 +675,6 @@ class A2AStarletteRouter:
                 handler_result = JSONRPCErrorResponse(
                     id=request_id, error=error
                 )
-
         return self._create_response(handler_result)
 
     def _create_response(
@@ -690,7 +716,6 @@ class A2AStarletteRouter:
                     exclude_none=True,
                 )
             )
-
         return JSONResponse(
             handler_result.root.model_dump(mode='json', exclude_none=True)
         )
@@ -704,27 +729,75 @@ class A2AStarletteRouter:
         Returns:
             A JSONResponse containing the agent card data.
         """
+        # The public agent card is a direct serialization of the agent_card
+        # provided at initialization.
         return JSONResponse(
             self.agent_card.model_dump(mode='json', exclude_none=True)
         )
 
-    def routes(self) -> list[Route]:
+    async def _handle_get_authenticated_extended_agent_card(
+        self, request: Request
+    ) -> JSONResponse:
+        """Handles GET requests for the authenticated extended agent card."""
+        if not self.agent_card.supportsAuthenticatedExtendedCard:
+            return JSONResponse(
+                {'error': 'Extended agent card not supported or not enabled.'},
+                status_code=404,
+            )
+        # If an explicit extended_agent_card is provided, serve that.
+        if self.extended_agent_card:
+            return JSONResponse(
+                self.extended_agent_card.model_dump(
+                    mode='json', exclude_none=True
+                )
+            )
+        # If supportsAuthenticatedExtendedCard is true, but no specific
+        # extended_agent_card was provided during server initialization,
+        # return a 404
+        return JSONResponse(
+            {
+                'error': 'Authenticated extended agent card is supported but not configured on the server.'
+            },
+            status_code=404,
+        )
+
+    def routes(
+        self,
+        agent_card_path: str = '/.well-known/agent.json',
+        extended_agent_card_path: str = '/agent/authenticatedExtendedCard',
+        rpc_path: str = '/',
+    ) -> list[Route]:
         """Returns the Starlette Routes for handling A2A requests.
+
+        Args:
+            agent_card_path: The URL path for the agent card endpoint.
+            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
+            extended_agent_card_path: The URL path for the authenticated extended agent card endpoint.
 
         Returns:
             A list of Starlette Route objects.
         """
-        return [
+        routes = [
             Route(
-                self.rpc_path,
+                rpc_path,
                 self._handle_requests,
                 methods=['POST'],
                 name='a2a_handler',
             ),
             Route(
-                self.agent_card_path,
+                agent_card_path,
                 self._handle_get_agent_card,
                 methods=['GET'],
                 name='agent_card',
             ),
         ]
+        if self.agent_card.supportsAuthenticatedExtendedCard:
+            routes.append(
+                Route(
+                    extended_agent_card_path,
+                    self._handle_get_authenticated_extended_agent_card,
+                    methods=['GET'],
+                    name='authenticated_extended_agent_card',
+                )
+            )
+        return routes
