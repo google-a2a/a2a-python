@@ -451,17 +451,18 @@ class A2AStarletteApplication:
         return Starlette(**kwargs)
 
 
-class A2AStarletteRouter:
-    """Defines Starlette routes for serving A2A protocol endpoints.
+class A2AStarletteRouteBuilder:
+    """Configurable builder for Starlette routes that serve A2A protocol endpoints.
 
-    This router provides the necessary HTTP routes for an A2A-compliant agent.
-    It handles routing, dispatches requests to appropriate handler methods,
-    and generates responses—including support for Server-Sent Events (SSE).
+    This builder constructs the necessary HTTP routes for an A2A-compliant agent.
+    It defines the routing logic, associates endpoints with handler methods,
+    and prepares responses—including support for Server-Sent Events (SSE).
 
     Note:
-        As of 2025-05-24, this class is functionally equivalent to
-        `A2AStarletteApplication` with the exception that it does not implement
-        the `build()` method.
+        As of 2025-05-24, this class is almost functionally equivalent to
+        `A2AStarletteApplication`, except that its `build()` method is focused
+        on building Starlette `Route` objects rather than constructing a full
+        Starlette application.
     """
 
     def __init__(
@@ -761,7 +762,7 @@ class A2AStarletteRouter:
             status_code=404,
         )
 
-    def routes(
+    def build(
         self,
         agent_card_path: str = '/.well-known/agent.json',
         extended_agent_card_path: str = '/agent/authenticatedExtendedCard',
