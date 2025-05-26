@@ -1,11 +1,13 @@
 import contextlib
 import json
 import logging
+import posixpath
 import traceback
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import ValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -13,7 +15,8 @@ from starlette.applications import Starlette
 from starlette.authentication import BaseUser
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from typing_extensions import Self
 
 from a2a.auth.user import UnauthenticatedUser
 from a2a.auth.user import User as A2AUser
@@ -24,6 +27,9 @@ from a2a.types import (
     A2AError,
     A2ARequest,
     AgentCard,
+    AgentCatalog,
+    AgentLinkContext,
+    AgentLinkTarget,
     CancelTaskRequest,
     GetTaskPushNotificationConfigRequest,
     GetTaskRequest,
@@ -460,8 +466,8 @@ class A2AStarletteRouteBuilder:
 
     Note:
         As of 2025-05-24, this class is almost functionally equivalent to
-        `A2AStarletteApplication`, except that its `build()` method is focused
-        on building Starlette `Route` objects rather than constructing a full
+        A2AStarletteApplication, except that its build() method is focused
+        on building Starlette Route objects rather than constructing a full
         Starlette application.
     """
 
@@ -470,6 +476,9 @@ class A2AStarletteRouteBuilder:
         agent_card: AgentCard,
         http_handler: RequestHandler,
         extended_agent_card: AgentCard | None = None,
+        agent_card_path: str = '/.well-known/agent.json',
+        extended_agent_card_path: str = '/agent/authenticatedExtendedCard',
+        rpc_path: str = '/',
         context_builder: CallContextBuilder | None = None,
     ):
         """Initializes the A2AStarletteRouter.
@@ -480,6 +489,9 @@ class A2AStarletteRouteBuilder:
               requests via http.
             extended_agent_card: An optional, distinct AgentCard to be served
               at the authenticated extended card endpoint.
+            agent_card_path: The URL path for the agent card endpoint.
+            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
+            extended_agent_card_path: The URL path for the authenticated extended agent card endpoint.
             context_builder: The CallContextBuilder used to construct the
               ServerCallContext passed to the http_handler. If None, no
               ServerCallContext is passed.
@@ -496,6 +508,9 @@ class A2AStarletteRouteBuilder:
             logger.error(
                 'AgentCard.supportsAuthenticatedExtendedCard is True, but no extended_agent_card was provided. The /agent/authenticatedExtendedCard endpoint will return 404.'
             )
+        self.agent_card_path = agent_card_path
+        self.extended_agent_card_path = extended_agent_card_path
+        self.rpc_path = rpc_path
         self._context_builder = context_builder
 
     def _generate_error_response(
@@ -762,31 +777,21 @@ class A2AStarletteRouteBuilder:
             status_code=404,
         )
 
-    def build(
-        self,
-        agent_card_path: str = '/.well-known/agent.json',
-        extended_agent_card_path: str = '/agent/authenticatedExtendedCard',
-        rpc_path: str = '/',
-    ) -> list[Route]:
+    def build(self) -> list[Route]:
         """Returns the Starlette Routes for handling A2A requests.
-
-        Args:
-            agent_card_path: The URL path for the agent card endpoint.
-            rpc_path: The URL path for the A2A JSON-RPC endpoint (POST requests).
-            extended_agent_card_path: The URL path for the authenticated extended agent card endpoint.
 
         Returns:
             A list of Starlette Route objects.
         """
         routes = [
             Route(
-                rpc_path,
+                self.rpc_path,
                 self._handle_requests,
                 methods=['POST'],
                 name='a2a_handler',
             ),
             Route(
-                agent_card_path,
+                self.agent_card_path,
                 self._handle_get_agent_card,
                 methods=['GET'],
                 name='agent_card',
@@ -795,10 +800,140 @@ class A2AStarletteRouteBuilder:
         if self.agent_card.supportsAuthenticatedExtendedCard:
             routes.append(
                 Route(
-                    extended_agent_card_path,
+                    self.extended_agent_card_path,
                     self._handle_get_authenticated_extended_agent_card,
                     methods=['GET'],
                     name='authenticated_extended_agent_card',
                 )
             )
         return routes
+
+
+class A2AStarletteBuilder:
+    """Builder class for assembling a Starlette application with A2A protocol routes.
+
+    This class enables mounting multiple A2AStarletteRouteBuilder instances under
+    specific paths and generates a complete Starlette application that serves them.
+    It also collects AgentLinkContext entries and exposes them as an AgentCatalog
+    document at the standard path /.well-known/api-catalog.json.
+    """
+
+    def __init__(self):
+        """Initializes an empty A2AStarletteBuilder instance.
+
+        This sets up the internal structure to hold multiple mounted A2A route groups
+        and the corresponding AgentLinkContext entries for inclusion in the Agent Catalog.
+
+        Attributes:
+            _mounts: A list of Starlette Mount objects representing route groups
+              mounted at specific paths.
+            _catalog_links: A list of AgentLinkContext instances used to generate
+              the Agent Catalog served at /.well-known/api-catalog.json.
+        """
+        self._mounts: list[Mount] = []
+        self._catalog_links: list[AgentLinkContext] = []
+
+    @staticmethod
+    def _join_url(base: str, *paths: str) -> str:
+        """Joins a base URL with one or more URL path fragments into a normalized absolute URL.
+
+        This method ensures that redundant slashes are removed between path segments,
+        and that the resulting URL is correctly formatted.
+
+        Args:
+            base: The base URL.
+            *paths: One or more URL fragments to append to the base path.
+
+        Returns:
+            A well-formed absolute URL with the joined path components.
+        """
+        parsed = urlparse(base)
+        clean_paths = [p.strip('/') for p in paths]
+        joined_path = posixpath.join(parsed.path.rstrip('/'), *clean_paths)
+        return urlunparse(parsed._replace(path='/' + joined_path))
+
+    async def _handle_get_api_catalog(self, request: Request) -> JSONResponse:
+        """Handles GET requests for the AgentCatalog endpoint.
+
+        Args:
+            request: The incoming Starlette Request object.
+
+        Returns:
+            A JSONResponse containing the AgentCatalog data.
+        """
+        catalog = AgentCatalog(links=self._catalog_links)
+        return JSONResponse(catalog.model_dump(mode='json', exclude_none=True))
+
+    def mount(
+        self,
+        path: str,
+        route_builder: A2AStarletteRouteBuilder,
+    ) -> Self:
+        """Mounts routes generated by the given builder and adds metadata to the agent catalog.
+
+        Raises:
+            ValueError: If a mount for the given path already exists.
+        """
+        if any(
+            posixpath.normpath(mount.path) == posixpath.normpath(path)
+            for mount in self._mounts
+        ):
+            raise ValueError(f'A mount for path "{path}" already exists.')
+        if (
+            route_builder.extended_agent_card is not None
+            and route_builder.agent_card.url
+            != route_builder.extended_agent_card.url
+        ):
+            raise ValueError(
+                'agent_card.url and extended_agent_card.url must be the same '
+                'if extended_agent_card is provided'
+            )
+        routes = route_builder.build()
+        self._mounts.append(Mount(path, routes=routes))
+        anchor = _join_url(
+            route_builder.agent_card.url, path, route_builder.rpc_path
+        )
+        describedby = [
+            AgentLinkTarget(
+                href=_join_url(
+                    route_builder.agent_card.url,
+                    path,
+                    route_builder.agent_card_path,
+                )
+            )
+        ]
+        if (
+            route_builder.extended_agent_card is not None
+            and route_builder.agent_card.agent_card.supportsAuthenticatedExtendedCard
+        ):
+            describedby.append(
+                AgentLinkTarget(
+                    href=_join_url(
+                        route_builder.extended_agent_card.url,
+                        path,
+                        route_builder.extended_agent_card_path,
+                    )
+                )
+            )
+        self._catalog_links.append(
+            AgentLinkContext(
+                anchor=anchor,
+                describedby=describedby,
+            )
+        )
+        return self
+
+    def build(self, **kwargs: Any) -> Starlette:
+        """Builds and returns a Starlette application."""
+        catalog_route = Route(
+            '/.well-known/api-catalog.json',
+            endpoint=self._handle_get_api_catalog,
+            methods=['GET'],
+            name='api_catalog',
+        )
+        routes = [*self._mounts, catalog_route]
+        if 'routes' in kwargs:
+            kwargs['routes'].extend(routes)
+        else:
+            kwargs['routes'] = routes
+        return Starlette(**kwargs)
