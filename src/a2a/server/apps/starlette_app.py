@@ -827,6 +827,7 @@ def _join_url(base: str, *paths: str) -> str:
     joined_path = posixpath.join(parsed.path.rstrip('/'), *clean_paths)
     return urlunparse(parsed._replace(path='/' + joined_path))
 
+
 def _get_path_from_url(url: str) -> str:
     """Extracts and returns the path component from a full URL.
 
@@ -838,6 +839,7 @@ def _get_path_from_url(url: str) -> str:
     """
     path = urlparse(url).path
     return path if path else '/'
+
 
 class A2AStarletteBuilder:
     """Builder class for assembling a Starlette application with A2A protocol routes.
