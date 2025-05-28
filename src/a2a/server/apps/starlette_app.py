@@ -476,7 +476,7 @@ class A2AStarletteRouteBuilder:
         agent_card: AgentCard,
         http_handler: RequestHandler,
         extended_agent_card: AgentCard | None = None,
-        agent_card_path: str = '/.well-known/agent.json',
+        agent_card_path: str = '/agent.json',
         extended_agent_card_path: str = '/agent/authenticatedExtendedCard',
         rpc_path: str = '/',
         context_builder: CallContextBuilder | None = None,
@@ -861,7 +861,7 @@ class A2AStarletteBuilder:
         Returns:
             A JSONResponse containing the AgentCatalog data.
         """
-        catalog = AgentCatalog(links=self._catalog_links)
+        catalog = AgentCatalog(linkset=self._catalog_links)
         return JSONResponse(catalog.model_dump(mode='json', exclude_none=True))
 
     def mount(
