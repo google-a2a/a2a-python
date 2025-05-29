@@ -5,21 +5,17 @@ import traceback
 
 import click
 import uvicorn
+from dotenv import load_dotenv
 
-from agent_executors import (
-    HelloWorldAgentExecutor, # type: ignore[import-untyped]
-    EchoAgentExecutor, # type: ignore[import-untyped]
+from agent_executors import (  # type: ignore[import-untyped]
+    EchoAgentExecutor,
+    HelloWorldAgentExecutor,
 )
 
-from a2a.server.apps import A2AStarletteRouteBuilder, A2AStarletteBuilder
+from a2a.server.apps import A2AStarletteBuilder, A2AStarletteRouteBuilder
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import (
-    AgentCapabilities,
-    AgentCard,
-    AgentSkill,
-)
-from dotenv import load_dotenv
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 
 
 load_dotenv()

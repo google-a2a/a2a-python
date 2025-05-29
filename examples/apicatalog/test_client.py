@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -6,7 +7,6 @@ import traceback
 
 import click
 import httpx
-
 from dotenv import load_dotenv
 
 
@@ -28,7 +28,7 @@ async def fetch_api_catalog(base_url: str):
 def main(host: str, port: int):
     base = f'http://{host}:{port}'
     catalog = asyncio.run(fetch_api_catalog(base))
-    print(catalog)
+    print(json.dumps(catalog))
 
 
 if __name__ == "__main__":
