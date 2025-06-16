@@ -263,6 +263,33 @@ def test_agent_card_invalid():
         AgentCard(**bad_card_data)  # Missing name
 
 
+def test_agent_card_with_snake_case():
+    card = AgentCard(
+        capabilities={},
+        default_input_modes=['text/plain'],
+        default_output_modes=['application/json'],
+        description='TestAgent',
+        name='TestAgent',
+        skills=[
+            AgentSkill(
+                id='skill-123',
+                name='Recipe Finder',
+                description='Finds recipes',
+                tags=['cooking'],
+            )
+        ],
+        url='http://example.com/agent',
+        version='1.0',
+    )
+    assert card.name == 'TestAgent'
+    assert card.version == '1.0'
+    assert len(card.skills) == 1
+    assert card.skills[0].id == 'skill-123'
+    assert card.provider is None  # Optional
+    assert card.default_input_modes[0] == 'text/plain'
+    assert card.default_output_modes[0] == 'application/json'
+
+
 # --- Test Parts ---
 
 
