@@ -23,6 +23,7 @@ uv run datamodel-codegen \
   --output "$GENERATED_FILE" \
   --target-python-version 3.10 \
   --output-model-type pydantic_v2.BaseModel \
+  --base-class a2a.pydantic_base.A2ABaseModel \
   --disable-timestamp \
   --use-schema-description \
   --use-union-operator \
