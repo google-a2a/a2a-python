@@ -14,7 +14,7 @@ class A2ABaseModel(BaseModel):
         populate_by_name=True,
     )
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> Any:  # noqa: D105
         snake = to_snake(name)
         if hasattr(self, snake):
             return getattr(self, snake)
