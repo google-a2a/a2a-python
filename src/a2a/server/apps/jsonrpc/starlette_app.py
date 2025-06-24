@@ -57,12 +57,12 @@ class A2AStarletteApplication(JSONRPCApplication):
             rpc_url: The URL path for the A2A JSON-RPC endpoint (POST requests).
             extended_agent_card_url: The URL for the authenticated extended agent card endpoint.
         """
-        app_routes = self.routes(
+        routes = self.routes(
             agent_card_url=agent_card_url,
             rpc_url=rpc_url,
             extended_agent_card_url=extended_agent_card_url,
         )
-        app.routes.extend(app_routes)
+        app.routes.extend(routes)
 
     def build(
         self,
